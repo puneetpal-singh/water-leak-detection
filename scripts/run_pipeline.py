@@ -20,8 +20,8 @@ def run() -> None:
     started = time.monotonic()
     config = json.loads((ROOT / 'config.json').read_text())
     results, processed = ROOT / 'results', ROOT / 'data/processed'
-    if not (processed / 'telemetry.parquet').exists():
-        prepare(ROOT)
+    # Rebuild after checksum verification rather than trusting an unversioned cache.
+    prepare(ROOT)
     telemetry = pd.read_parquet(processed / 'telemetry.parquet')
     truth = pd.read_parquet(processed / 'leak_truth.parquet')
     events = read_events(ROOT / 'data/raw')
@@ -29,14 +29,18 @@ def run() -> None:
     insights = analyse(telemetry, truth, events, results)
     x = aggregate(telemetry, config['model_frequency'])
     features, residuals = causal_features(x)
-    # Last partial bin remains available for plots, but not the 2019 score table.
+    # The last completed bin is available at 2020-01-01, outside this test interval.
     features = features.loc[features.index < '2020-01-01']
     fit_mask = stable_training_mask(features.index, events, config['train_end'],
                                     config['transition_exclusion_hours']) & features.notna().all(axis=1)
     if fit_mask.sum() < 100:
         raise ValueError('Too few training observations')
     log.info('Fitting 5 methods on %s stable-operation rows, %s features', fit_mask.sum(), features.shape[1])
-    scores, sensor_z, metadata = fit_and_score(features, fit_mask, config['seed'], config['fit_sample_limit'])
+    scores, sensor_z, metadata = fit_and_score(features, fit_mask, config['seed'], config['fit_sample_limit'],
+                                              config['threshold_reference_fraction'])
+    reference = scores.index[metadata['threshold_reference_row_positions']]
+    def exceedance(method: str, threshold: float) -> pd.Series:
+        return (scores[method].gt(threshold) & sensor_gate).astype('boolean').where(scores[method].notna())
     sensor_gate = sensor_z.abs().gt(config['sensor_z_threshold']).sum(axis=1).ge(config['minimum_sensors'])
     metrics, event_tables, alarm_tables, calibration, sensitivity = [], [], [], [], []
     activity = pd.DataFrame(index=scores.index)
@@ -44,8 +48,8 @@ def run() -> None:
     for method in scores:
         candidates = []
         for quantile in config['threshold_quantiles']:
-            threshold = float(scores.loc[fit_mask, method].quantile(quantile))
-            active, episodes = alarm_episodes(scores[method].gt(threshold) & sensor_gate,
+            threshold = float(scores.loc[reference, method].quantile(quantile))
+            active, episodes = alarm_episodes(exceedance(method, threshold),
                                                config['alarm_persistence'])
             validation, _ = evaluate(scores[method], active, episodes, events,
                                       config['train_end'], config['validation_end'], config['onset_horizon_hours'])
@@ -54,7 +58,7 @@ def run() -> None:
             candidates.append((validation['event_f1'], -validation['false_alarms'], quantile, threshold))
         # Validation event F1 is predeclared. Tie-break fewer alarms, then higher quantile.
         _, _, quantile, threshold = max(candidates)
-        active, episodes = alarm_episodes(scores[method].gt(threshold) & sensor_gate,
+        active, episodes = alarm_episodes(exceedance(method, threshold),
                                            config['alarm_persistence'])
         test, event_table = evaluate(scores[method], active, episodes, events,
                                     '2019-01-01', '2020-01-01', config['onset_horizon_hours'])
@@ -90,7 +94,7 @@ def run() -> None:
     pd.DataFrame(sensitivity).to_csv(results / 'horizon_sensitivity.csv', index=False)
     pd.DataFrame(calibration).to_csv(results / 'validation_calibration.csv', index=False)
     pd.concat(event_tables).to_csv(results / 'event_detections.csv', index=False)
-    pd.concat([a for a in alarm_tables if len(a)]).to_csv(results / 'alarm_episodes.csv', index=False)
+    pd.concat(alarm_tables).to_csv(results / 'alarm_episodes.csv', index=False)
     scores.to_parquet(processed / 'scores.parquet')
     activity.to_parquet(processed / 'activity.parquet')
     sensor_z.to_parquet(processed / 'sensor_z.parquet')
@@ -104,7 +108,8 @@ def run() -> None:
         table['split'] = split
         feature_stats.append(table)
     pd.concat(feature_stats).to_csv(results / 'feature_distributions.csv', index=False)
-    metadata.update({'config': config, 'thresholds': chosen, 'duration_seconds': time.monotonic() - started,
+    metadata.update({'protocol_version': 2, 'benchmark_status': '2019 revisited after correctness review; no test-based hyperparameter search',
+                     'config': config, 'thresholds': chosen, 'duration_seconds': time.monotonic() - started,
                      'training_start': str(features.loc[fit_mask].index.min()),
                      'training_last': str(features.loc[fit_mask].index.max()),
                      'training_state': 'stable operation; may contain ongoing background leaks'})

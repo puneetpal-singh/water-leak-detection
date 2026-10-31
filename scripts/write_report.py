@@ -112,7 +112,7 @@ a pressure contrast and a guarded flow-ratio change: **{experiment['feature_coun
 
 The daily reference uses only the preceding seven days, with at least five daily
 observations. No centered windows, future filling or event labels enter features.
-Scaling, feature selection and model fits use training rows only. The trailing
+Scaling, feature selection and model fits use only the estimator fitting subset. The trailing
 reference updates causally during test, while fitted models and thresholds stay fixed.
 
 Five methods are compared: a sensor residual MAD baseline, IQR fences, Isolation
@@ -124,11 +124,14 @@ All methods share the sensor gate and alarm policy. PCA retains
 ## Evaluation design
 
 Fit on January–September 2018 after warmup and exclusions around historical
-transitions: {experiment['training_rows']:,} eligible rows, with a seeded sample of {experiment['sample_rows']:,} for ML fitting.
+transitions: {experiment['training_rows']:,} eligible rows. The earliest 80% form the
+fitting pool; a seeded sample of {experiment['sample_rows']:,} fits all transforms and estimators.
+The latest 20% ({experiment['threshold_reference_rows']:,} rows) are an unseen threshold-reference period,
+chronologically later than and disjoint from every estimator fitting row.
 These are **stable operating states with background leaks**, not certified leak-free
 examples. Validation covers October–December 2018; 2019 is held out for testing.
 
-Choose among five predeclared training-score percentiles using validation event
+Choose among five predeclared unseen-reference score percentiles using validation event
 F1. Validation has only two new onsets, making calibration uncertain. Require
 four consecutive 15-minute exceedances and at least two abnormal sensors;
 clear after four non-exceedances. Confirmation is not backdated.
@@ -139,6 +142,11 @@ Unmatched alarms are false relative to this task, even if they reflect another
 real hydraulic change. Point F1 uses active alarms; AP uses raw scores. No-skill
 test AP is {pca.positive_fraction:.3f}. Mean delays include detections only, so read them with misses.
 The pipeline also exports 24/72/168-hour sensitivity and a 200-shift timing control.
+
+This is **protocol v2**, revised after a correctness review of LOF novelty scoring.
+2019 is a chronological benchmark that has already been inspected; it is no longer
+claimed to be an untouched external final test. Threshold selection remains entirely
+in 2018. Original results remain in Git history. See the [review report](docs/review.md).
 
 ## Measured 2019 results
 
@@ -167,9 +175,10 @@ standard deviations, rates of change and full evaluation tables.
 
 ![Event investigation with sensor residual attribution](results/screenshots/event.jpg)
 
-Six self-contained interactive figures are in [results/figures](results/figures):
+Nine self-contained interactive figures are in [results/figures](results/figures):
 hourly flow, sensor correlations, model comparison, delay distributions, a
-three-panel p523 event investigation, and a selected pressure-flow relationship.
+three-panel p523 event investigation, a selected pressure-flow relationship,
+precision–recall curves, event timelines and feature-distribution comparisons.
 Open the HTML files locally. Browser charts can export PNGs.
 
 ## Installation and usage
@@ -187,12 +196,13 @@ python scripts/inspect_data.py
 python scripts/run_pipeline.py
 python scripts/export_dashboard.py
 python scripts/write_report.py
+python scripts/verify_results.py
 python -m pytest -q
 python -m streamlit run dashboard/app.py
 ```
 
 On macOS/Linux use `source .venv/bin/activate` instead. Downloading needs network
-access and roughly 205 MB for the selected source files. Allow about 1 GB free
+access and roughly 189 MB for the selected source files. Allow about 1 GB free
 space for sources, derived data, exports and a virtual environment. The pipeline
 runs on a CPU; runtime varies by machine. Important parameters and random seed
 are in [config.json](config.json). Run scripts from the repository root.
@@ -222,14 +232,25 @@ docs/                      Methodology, walkthrough and /unslop design review
 ```
 
 The notebooks use reusable modules and saved results; they are not the pipeline.
-Open them after running the scripts above. They contain analysis entry points,
-not fabricated precomputed cell outputs.
+The committed notebooks contain real executed outputs. The export script regenerates
+clean notebooks; install the optional notebook dependencies and execute them again:
+
+```powershell
+python -m pip install -r requirements-notebooks.txt
+python scripts/check_notebooks.py
+```
+
+This uses the active Python interpreter and does not install a user-wide kernel.
 
 ## Validation and limitations
 
-Nine tests check bounded forward fill, missing-grid handling, conflicting
+The regression suite checks bounded forward fill, absolute grid alignment, conflicting
 duplicates, signed values, complete-bin availability, future-invariant features,
-training-label boundaries, future-invariant model fitting and strict event matching.
+training-label boundaries, future-invariant model fitting, disjoint reference
+calibration, missing-data alarm behaviour and strict chronological event matching.
+Every experiment rerun verifies raw checksums and rebuilds telemetry. The independent
+artifact check verifies every sensor export, event-export structure, saved metrics
+and reference percentile against the generated experiment.
 `python scripts/check_dashboard.py` exercises all six Streamlit views against
 the generated experiment. Browser checks cover web navigation and sensor/date/event
 controls; the source includes responsive layouts and keyboard focus states.

@@ -1,0 +1,15 @@
+{
+  "protocol_version": 2,
+  "verified_sources": 14,
+  "source_shape": [
+    210240,
+    119
+  ],
+  "estimator_fit_rows": 6000,
+  "unseen_reference_rows": 1861,
+  "model_metric_rows_verified": 5,
+  "event_detection_rows_verified": 95,
+  "sensor_exports_verified": 119,
+  "event_windows_verified": 33,
+  "status": "passed"
+}

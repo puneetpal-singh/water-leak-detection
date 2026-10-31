@@ -33,3 +33,10 @@ real traces and topology as the visuals; no motion beyond ordinary controls.
 Browser checks exercised sensor/date changes, event sensor attribution, operating
 patterns and actual network/correlation rendering. Streamlit AppTest exercised
 all six workbench views. Screenshots are stored in results/screenshots.
+
+## Protocol-v2 review
+
+Preserved the established palette, typography and layout. Added PR curves and
+event timelines using the same quiet chart treatment. Updated screenshots and
+labels to show the revised calibration and measured results. Invalid date ranges
+now clear charts; stale asynchronous responses cannot redraw a newer route.

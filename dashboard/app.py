@@ -125,7 +125,7 @@ elif page == 'Sensor explorer':
         change=values.diff().dropna()/5
         chart(go.Figure(go.Scatter(x=change.index,y=change,name='Rate of change per minute')), 'Sensor units / min')
     st.dataframe(values.describe(percentiles=[.01,.05,.5,.95,.99]).to_frame('value'))
-    st.caption('Residual departures are per-sensor reference deviations, not confirmed leaks. Demands have no detector attribution in this experiment.')
+    st.caption('Residual departures are per-sensor reference deviations, not confirmed leaks. 2018 overlays are retrospective fitting diagnostics; evaluation concerns 2019. Demands have no detector attribution in this experiment.')
 
 elif page == 'Leak event explorer':
     st.title('Leak event explorer')
@@ -160,6 +160,11 @@ elif page == 'Model comparison':
     st.title('Model comparison')
     st.write('2019 test year · new-onset task · frozen thresholds')
     metrics_table(d['metrics'])
+    curves = pd.read_csv(ROOT/'results/precision_recall_curves.csv')
+    fig = px.line(curves, x='recall', y='precision', color='method', title='Precision–recall trade-off · raw scores')
+    fig.add_hline(y=float(d['metrics'].positive_fraction.iloc[0]), line_dash='dash', line_color='#69737b')
+    fig.update_xaxes(range=[0,1]); fig.update_yaxes(range=[0,1])
+    chart(fig)
     a,b=st.columns(2)
     with a:chart(px.bar(d['metrics'],x='method',y='false_alarms',title='Unmatched new alarm starts'))
     with b:
@@ -169,6 +174,18 @@ elif page == 'Model comparison':
                  title='Detection delay distribution · detected events only'))
     st.subheader('Every known test-year event')
     st.dataframe(d['detections'],hide_index=True,width='stretch')
+    timeline_method = st.selectbox('Timeline method', scores.columns, index=list(scores).index('PCA reconstruction'))
+    known = events[events.start.dt.year.eq(2019)]
+    detected = d['detections'][d['detections'].method.eq(timeline_method)]
+    matched = detected.dropna(subset=['detected_at'])
+    missed = detected[detected.detected_at.isna()]
+    fig = go.Figure([
+        go.Scatter(x=known.start, y=known['pipe'], mode='markers', name='Known onset', marker=dict(symbol='line-ns',size=14,color='#a66a17')),
+        go.Scatter(x=matched.detected_at,y=matched['pipe'],mode='markers',name='Matched confirmation',marker=dict(size=8,color='#087782')),
+        go.Scatter(x=missed.start+pd.Timedelta(hours=72),y=missed['pipe'],mode='markers',name='Missed within 72h',marker=dict(symbol='x',size=8,color='#ac493b'))])
+    fig.update_yaxes(categoryorder='array',categoryarray=list(reversed(known['pipe'].tolist())))
+    chart(fig,height=600)
+    st.caption('Protocol v2 follows a correctness review. The 2019 benchmark has been inspected; threshold selection remains entirely in 2018.')
     with st.expander('Fixed-threshold horizon sensitivity and validation candidates'):
         st.dataframe(pd.read_csv(ROOT/'results/horizon_sensitivity.csv'),hide_index=True)
         st.dataframe(pd.read_csv(ROOT/'results/validation_calibration.csv'),hide_index=True)

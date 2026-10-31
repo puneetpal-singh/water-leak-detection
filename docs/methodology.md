@@ -27,6 +27,9 @@ Fit: January–September 2018, after feature warmup, excluding seven days either
 side of known historical onsets and three days either side of historical repairs.
 Validation: October–December 2018. Test: January–December 2019.
 2019 event labels never enter training selection, feature construction or calibration.
+This is protocol version 2: the 2019 benchmark has been revisited after a correctness
+review. It is no longer described as an untouched final external test. No
+hyperparameter search or choice of percentile was made using 2019 outcomes.
 
 Only about 2.2% of 2018 is free of *all* simulated leaks. The first leak begins
 January 8, leaving too little leak-free history to represent seasonal operation.
@@ -49,9 +52,17 @@ updates from *past measurements*, including during test; fitted model parameters
 scales and thresholds stay frozen. This causal adaptation can absorb slow leaks
 and reduce sensitivity to gradual onsets.
 
-RobustScaler fits only eligible training rows. Features with negligible training
+Within eligible January–September rows, the first 80% chronologically form the
+estimator fitting pool, and the last 20% are an unseen threshold-reference period.
+Up to 6,000 seeded fitting-pool rows fit every transform and estimator, including
+MAD scales and IQR fences. The reference period is disjoint and later than all
+estimator fit rows; it never fits transformations or models.
+
+RobustScaler fits only sampled fitting-pool rows. Features with negligible training
 variation are dropped; transformed values clip to [-25, 25] to bound extreme
-inputs. Models fit a fixed seeded sample of up to 6,000 eligible training rows.
+inputs. Fit-row LOF factors use `negative_outlier_factor_`; novelty `score_samples`
+is called only on unseen rows. Only unseen reference scores define threshold
+percentiles, as required by the [scikit-learn LOF guidance](https://scikit-learn.org/stable/modules/outlier_detection.html#novelty-detection-with-local-outlier-factor).
 The robust baseline averages the three largest absolute sensor residual MAD
 z-scores (MAD scale floor 0.01 in each sensor's units), without score clipping.
 The IQR baseline averages exceedances
@@ -64,7 +75,7 @@ alarm policy. Deep learning is not needed for this comparison.
 ## Thresholds and streaming alarms
 
 Candidate thresholds are the 95th, 97.5th, 99th, 99.5th and 99.9th percentiles of
-training scores. Choose by validation **event F1**, then fewer unmatched alarms,
+unseen 2018 threshold-reference scores. Choose by validation **event F1**, then fewer unmatched alarms,
 then the larger quantile. This small validation set contains only two new onsets,
 so threshold choice is uncertain; every candidate is saved for review.
 
@@ -73,6 +84,10 @@ above 2.5, using training median and MAD. An alarm emits after four consecutive
 15-minute exceedances. Its timestamp is the confirmation time, not the start of
 the run. Clear after four consecutive non-exceedances to suppress chatter.
 The persistence and clearance values are fixed before test, not optimized on 2019.
+Missing scores and timestamp gaps interrupt confirmation and clearance runs.
+Missing data cannot clear an active alarm or confirm a new one; an active alarm
+remains unresolved until enough observed normal bins arrive. Missing score rows
+are excluded from point metrics.
 
 ## Evaluation
 
@@ -103,8 +118,18 @@ explain sensor departures; they are **not** Isolation Forest feature importances
 causal pipe diagnoses or SHAP explanations. Before/onset/recovery medians are
 retrospective descriptive comparisons, confounded by diurnal demand and overlapping
 leaks. Many events continue to the record's end and have no observed recovery.
+Sensor overlays in 2018 use retrospectively fitted scales and are training
+diagnostics, not alarms that were historically available before model fitting.
 
 The data are realistic **simulated** telemetry, not a deployed utility trial.
 There is one network, one test year and no independent geographic holdout.
 Seasonal drift, short validation history, sustained leaks and rolling-reference
 adaptation limit conclusions. No official competition ranking is claimed.
+
+## Reproducibility checks
+
+Every experiment rerun verifies raw file checksums and rebuilds the aligned
+telemetry rather than trusting a stale Parquet cache. `scripts/verify_results.py`
+checks fit/reference chronology and disjointness, reference percentiles, saved
+metrics, event/episode agreement and browser-export consistency. Original v1
+results remain in Git history; the review report records before/after changes.

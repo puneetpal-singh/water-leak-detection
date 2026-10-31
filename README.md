@@ -97,7 +97,7 @@ a pressure contrast and a guarded flow-ratio change: **261 features**.
 
 The daily reference uses only the preceding seven days, with at least five daily
 observations. No centered windows, future filling or event labels enter features.
-Scaling, feature selection and model fits use training rows only. The trailing
+Scaling, feature selection and model fits use only the estimator fitting subset. The trailing
 reference updates causally during test, while fitted models and thresholds stay fixed.
 
 Five methods are compared: a sensor residual MAD baseline, IQR fences, Isolation
@@ -109,11 +109,14 @@ All methods share the sensor gate and alarm policy. PCA retains
 ## Evaluation design
 
 Fit on January–September 2018 after warmup and exclusions around historical
-transitions: 9,305 eligible rows, with a seeded sample of 6,000 for ML fitting.
+transitions: 9,305 eligible rows. The earliest 80% form the
+fitting pool; a seeded sample of 6,000 fits all transforms and estimators.
+The latest 20% (1,861 rows) are an unseen threshold-reference period,
+chronologically later than and disjoint from every estimator fitting row.
 These are **stable operating states with background leaks**, not certified leak-free
 examples. Validation covers October–December 2018; 2019 is held out for testing.
 
-Choose among five predeclared training-score percentiles using validation event
+Choose among five predeclared unseen-reference score percentiles using validation event
 F1. Validation has only two new onsets, making calibration uncertain. Require
 four consecutive 15-minute exceedances and at least two abnormal sensors;
 clear after four non-exceedances. Confirmation is not backdated.
@@ -125,18 +128,23 @@ real hydraulic change. Point F1 uses active alarms; AP uses raw scores. No-skill
 test AP is 0.156. Mean delays include detections only, so read them with misses.
 The pipeline also exports 24/72/168-hour sensitivity and a 200-shift timing control.
 
+This is **protocol v2**, revised after a correctness review of LOF novelty scoring.
+2019 is a chronological benchmark that has already been inspected; it is no longer
+claimed to be an untouched external final test. Threshold selection remains entirely
+in 2018. Original results remain in Git history. See the [review report](docs/review.md).
+
 ## Measured 2019 results
 
 | Method | Precision | Recall | F1 | AP | Events detected | False alarms | Mean delay (h) |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| Robust baseline | 0.160 | 0.053 | 0.080 | 0.165 | 11/19 | 123 | 35.1 |
-| IQR baseline | 0.164 | 0.154 | 0.159 | 0.164 | 19/19 | 292 | 27.0 |
-| Isolation Forest | 0.163 | 0.157 | 0.160 | 0.171 | 19/19 | 340 | 22.8 |
-| PCA reconstruction | 0.233 | 0.237 | 0.235 | 0.216 | 18/19 | 273 | 25.7 |
-| Local Outlier Factor | 0.238 | 0.142 | 0.178 | 0.196 | 18/19 | 216 | 24.7 |
+| Robust baseline | 0.164 | 0.076 | 0.103 | 0.165 | 15/19 | 158 | 33.1 |
+| IQR baseline | 0.166 | 0.198 | 0.180 | 0.164 | 19/19 | 330 | 27.3 |
+| Isolation Forest | 0.167 | 0.203 | 0.183 | 0.170 | 19/19 | 397 | 22.3 |
+| PCA reconstruction | 0.297 | 0.121 | 0.172 | 0.216 | 16/19 | 135 | 36.4 |
+| Local Outlier Factor | 0.233 | 0.126 | 0.164 | 0.197 | 17/19 | 207 | 28.6 |
 
-PCA matches 18/19 events, but its timing-shift control averages
-91.3% recall. Its 273 unmatched alarms (5.24/week) make
+PCA matches 16/19 events, but its timing-shift control averages
+67.7% recall. Its 135 unmatched alarms (2.59/week) make
 event recall insufficient evidence of useful detection. Point AP is
 0.216 against 0.156 prevalence: modest separation, not a deployment result.
 
@@ -156,9 +164,10 @@ standard deviations, rates of change and full evaluation tables.
 
 ![Event investigation with sensor residual attribution](results/screenshots/event.jpg)
 
-Six self-contained interactive figures are in [results/figures](results/figures):
+Nine self-contained interactive figures are in [results/figures](results/figures):
 hourly flow, sensor correlations, model comparison, delay distributions, a
-three-panel p523 event investigation, and a selected pressure-flow relationship.
+three-panel p523 event investigation, a selected pressure-flow relationship,
+precision–recall curves, event timelines and feature-distribution comparisons.
 Open the HTML files locally. Browser charts can export PNGs.
 
 ## Installation and usage
@@ -176,12 +185,13 @@ python scripts/inspect_data.py
 python scripts/run_pipeline.py
 python scripts/export_dashboard.py
 python scripts/write_report.py
+python scripts/verify_results.py
 python -m pytest -q
 python -m streamlit run dashboard/app.py
 ```
 
 On macOS/Linux use `source .venv/bin/activate` instead. Downloading needs network
-access and roughly 205 MB for the selected source files. Allow about 1 GB free
+access and roughly 189 MB for the selected source files. Allow about 1 GB free
 space for sources, derived data, exports and a virtual environment. The pipeline
 runs on a CPU; runtime varies by machine. Important parameters and random seed
 are in [config.json](config.json). Run scripts from the repository root.
@@ -211,14 +221,25 @@ docs/                      Methodology, walkthrough and /unslop design review
 ```
 
 The notebooks use reusable modules and saved results; they are not the pipeline.
-Open them after running the scripts above. They contain analysis entry points,
-not fabricated precomputed cell outputs.
+The committed notebooks contain real executed outputs. The export script regenerates
+clean notebooks; install the optional notebook dependencies and execute them again:
+
+```powershell
+python -m pip install -r requirements-notebooks.txt
+python scripts/check_notebooks.py
+```
+
+This uses the active Python interpreter and does not install a user-wide kernel.
 
 ## Validation and limitations
 
-Nine tests check bounded forward fill, missing-grid handling, conflicting
+The regression suite checks bounded forward fill, absolute grid alignment, conflicting
 duplicates, signed values, complete-bin availability, future-invariant features,
-training-label boundaries, future-invariant model fitting and strict event matching.
+training-label boundaries, future-invariant model fitting, disjoint reference
+calibration, missing-data alarm behaviour and strict chronological event matching.
+Every experiment rerun verifies raw checksums and rebuilds telemetry. The independent
+artifact check verifies every sensor export, event-export structure, saved metrics
+and reference percentile against the generated experiment.
 `python scripts/check_dashboard.py` exercises all six Streamlit views against
 the generated experiment. Browser checks cover web navigation and sensor/date/event
 controls; the source includes responsive layouts and keyboard focus states.

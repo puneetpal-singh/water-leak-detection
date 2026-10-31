@@ -1,12 +1,31 @@
 """Read the inspected BattLeDIM schema without mixing truth into telemetry."""
 from pathlib import Path
 import json
+import hashlib
 import numpy as np
 import pandas as pd
 import yaml
 
 KINDS = {'Pressures': ('pressure', 'm'), 'Flows': ('flow', 'm3/h'),
          'Levels': ('level', 'm'), 'Demands': ('demand', 'L/h')}
+
+def verify_sources(raw: Path) -> dict:
+    """Reject changed source bytes before rebuilding derived data."""
+    record = json.loads((raw / 'zenodo_record.json').read_text())
+    verified = {}
+    for entry in record['files']:
+        path = raw / entry['key']
+        if not path.exists():
+            continue
+        algorithm, expected = entry['checksum'].split(':', 1)
+        if algorithm != 'md5':
+            raise ValueError(f'Unsupported checksum: {algorithm}')
+        with path.open('rb') as handle:
+            actual = hashlib.file_digest(handle, 'md5').hexdigest()
+        if actual != expected:
+            raise ValueError(f'Source checksum mismatch: {path.name}; run download_data.py again')
+        verified[path.name] = entry['checksum']
+    return verified
 
 def read_csv(path: Path) -> pd.DataFrame:
     frame = pd.read_csv(path, sep=';', decimal=',')
@@ -16,10 +35,16 @@ def read_csv(path: Path) -> pd.DataFrame:
 
 def audit_and_clean(frame: pd.DataFrame, kind: str) -> tuple[pd.DataFrame, dict]:
     """Drop only identical timestamp duplicates; fill at most two past samples."""
+    if frame.empty or not isinstance(frame.index, pd.DatetimeIndex) or frame.index.hasnans:
+        raise ValueError('Measurements require a nonempty, valid DatetimeIndex')
+    frame = frame.sort_index()
+    if not frame.index.floor('5min').equals(frame.index):
+        raise ValueError('Off-grid timestamps require explicit handling')
     duplicates = int(frame.index.duplicated().sum())
     if duplicates:
         for _, group in frame[frame.index.duplicated(keep=False)].groupby(level=0):
-            if not group.eq(group.iloc[0]).all().all():
+            same = group.eq(group.iloc[0]) | (group.isna() & group.iloc[0].isna())
+            if not same.all().all():
                 raise ValueError('Conflicting measurements at a duplicate timestamp')
     original = frame[~frame.index.duplicated(keep='first')]
     grid = pd.date_range(original.index.min(), original.index.max(), freq='5min', name='timestamp')
@@ -76,6 +101,7 @@ def prepare(root: Path) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, dict]
     raw, results, processed = root / 'data/raw', root / 'results', root / 'data/processed'
     results.mkdir(exist_ok=True)
     processed.mkdir(parents=True, exist_ok=True)
+    verified = verify_sources(raw)
     frames, truths, audits, dictionary = [], [], {}, []
     for year in [2018, 2019]:
         measurements = []
@@ -100,6 +126,7 @@ def prepare(root: Path) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, dict]
     truth = pd.concat(truths).fillna(0).sort_index()
     events = read_events(raw)
     telemetry.to_parquet(processed / 'telemetry.parquet')
+    (processed / 'source_checksums.json').write_text(json.dumps(verified, indent=2), encoding='utf-8')
     truth.to_parquet(processed / 'leak_truth.parquet')
     events.to_csv(results / 'events.csv', index=False)
     pd.DataFrame(dictionary).to_csv(results / 'data_dictionary.csv', index=False)

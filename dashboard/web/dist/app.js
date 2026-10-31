@@ -31,7 +31,7 @@ function metric(label,value,note) { return `<div class="metric ${String(value).l
 function panel(title,copy,chart,id,cls='') { return `<div class="panel"><h2>${title}</h2><p>${copy}</p>${chart ? `<div id="${id}" class="chart ${cls}"></div>`:''}</div>`; }
 function options(values,chosen) { return values.map(v=>`<option ${v===chosen?'selected':''} value="${esc(v)}">${esc(v)}</option>`).join(''); }
 function sensorOptions(prefix,chosen) { return options(DATA.sensors.filter(s=>!prefix || s.id.startsWith(prefix)).map(s=>s.id),chosen); }
-function bind(id,event,callback) { $(id).addEventListener(event,()=>Promise.resolve(callback()).catch(showError)); }
+function bind(id,event,callback) { $(id).addEventListener(event,async()=>{try{await callback();}catch(error){showError(error);}}); }
 function showError(error) { $('status').style.display='block'; $('status').textContent=`Unable to display this view: ${error.message}`; }
 function modelRows() { return DATA.metrics.map(m=>`<tr><td>${esc(m.method)}</td><td class="num">${fmt(m.precision,3)}</td><td class="num">${fmt(m.recall,3)}</td><td class="num">${fmt(m.f1,3)}</td><td class="num">${fmt(m.pr_auc_ap,3)}</td><td class="num">${m.leaks_detected}/${m.leaks_total}</td><td class="num">${m.false_alarms}</td><td class="num">${fmt(m.mean_delay_hours)} h</td></tr>`).join(''); }
 const comparisonTable = () => `<div class="table-scroll"><table><thead><tr><th>Method</th><th class="num">Precision</th><th class="num">Recall</th><th class="num">F1</th><th class="num">AP</th><th class="num">Events</th><th class="num">False alarms</th><th class="num">Mean delay</th></tr></thead><tbody>${modelRows()}</tbody></table></div>`;
@@ -48,19 +48,20 @@ async function overview(version) {
   plot('overview-chart',[line(window.x,window.measurements['pressure:n1'],'Pressure n1')],{yaxis:{title:{text:'Pressure (m)'},gridcolor:'#edf0f1'},shapes:[onsetShape(event.start)],annotations:[{x:event.start,y:1.04,yref:'paper',text:'Known onset',showarrow:false,font:{color:'#a66a17',size:11}}]});
 }
 
-async function sensors() {
-  $('content').innerHTML=intro('Sensor explorer','Inspect hourly averages from all 119 measurement channels. The local Streamlit app also exposes the original five-minute measurements.')+
+async function sensors(version) {
+  $('content').innerHTML=intro('Sensor explorer','Inspect hourly averages from all 119 measurement channels. The local Streamlit app exposes the original five-minute measurements. Anomaly overlays in 2018 are retrospective fitting diagnostics; evaluation concerns 2019.')+
     `<div class="controls"><label>Sensor<select id="sensor">${sensorOptions('', 'pressure:n1')}</select></label><label>From<input id="from" type="date" value="2019-01-01" min="2018-01-01" max="2019-12-31"></label><label>Through<input id="through" type="date" value="2019-02-01" min="2018-01-01" max="2019-12-31"></label><label>Rolling window<select id="rolling">${options(['6 hours','24 hours','168 hours'],'24 hours')}</select></label><button id="update">Update view</button></div><div id="sensor-stats" class="metrics"></div>`+
     panel('Measurements and trailing mean','Hourly means retain diurnal structure; peaks within an hour are smoothed.',true,'sensor-trace')+
     `<div class="split">${panel('Distribution','Selected date range',true,'sensor-hist','short')}${panel('Hour-of-day pattern','Selected range · source wall-clock hour',true,'sensor-profile','short')}</div>`;
   let request=0;
   async function update() {
     const own=++request, sensor=DATA.sensors.find(s=>s.id===$('sensor').value), file=await fetchJSON(sensor.file);
-    if(own!==request || !$('sensor-trace')) return;
+    if(own!==request || version!==routeVersion || !$('sensor-trace')) return;
     const start=$('from').value, end=$('through').value;
-    if(!start || !end || start>end) { $('sensor-stats').innerHTML='<p>Choose a valid date range with From before Through.</p>'; return; }
+    function clearCharts(){for(const id of ['sensor-trace','sensor-hist','sensor-profile']){$(id).replaceChildren();Plotly.purge(id);}}
+    if(!start || !end || start>end) { clearCharts();$('sensor-stats').innerHTML='<p>Choose a valid date range with From before Through.</p>'; return; }
     const pairs=file.x.map((x,j)=>[x,file.y[j],file.abnormal?.[j]]).filter(([x,y])=>x.slice(0,10)>=start&&x.slice(0,10)<=end&&y!=null);
-    if(!pairs.length) { $('sensor-stats').innerHTML='<p>No observations in the selected period.</p>'; return; }
+    if(!pairs.length) { clearCharts();$('sensor-stats').innerHTML='<p>No observations in the selected period.</p>'; return; }
     const x=pairs.map(p=>p[0]), y=pairs.map(p=>p[1]), count=parseInt($('rolling').value), rolling=[];
     let sum=0; y.forEach((v,j)=>{sum+=v;if(j>=count)sum-=y[j-count];rolling.push(j>=count-1?sum/count:null);});
     const mean=y.reduce((a,b)=>a+b,0)/y.length;
@@ -75,14 +76,14 @@ async function sensors() {
   bind('update','click',update);bind('sensor','change',update);bind('rolling','change',update);await update();
 }
 
-async function events() {
+async function events(version) {
   const testEvents=DATA.events.filter(e=>e.year===2019);
   $('content').innerHTML=intro('Leak event explorer','Compare a known onset with pressure, flow and model scores. Amber marks retrospective ground truth; a dark marker shows the alarm confirmation time.')+
     `<div class="controls"><label>Test-year event<select id="event">${testEvents.map(e=>`<option value="${e.pipe}">${e.pipe} · ${e.start.slice(0,10)} · ${e.type}</option>`).join('')}</select></label><label>Method<select id="method">${options(DATA.metrics.map(m=>m.method),'PCA reconstruction')}</select></label><label>Pressure sensor<select id="event-pressure">${sensorOptions('pressure:','pressure:n1')}</select></label><label>Flow sensor<select id="event-flow">${sensorOptions('flow:','flow:p227')}</select></label></div><div id="event-summary"></div><div class="layout"><div>${panel('Pressure response','Completed 15-minute bin means',true,'event-pressure-chart')}${panel('Flow response','Read alongside pressure and the demand cycle',true,'event-flow-chart')}${panel('Anomaly score and threshold','Threshold fixed using 2018 validation; score alone does not emit an alarm',true,'event-score-chart')}</div><div><div class="panel"><h2>At alarm confirmation</h2><div id="contributors"></div><p class="caption">Signed sensor residual robust-z, ranked by magnitude. These explain departures from the trailing reference, not a causal pipe location or ML feature importance.</p></div><div class="panel"><h2>Read the event carefully</h2><p>A new alarm must start after this onset and within 72 hours. A pre-existing alarm receives no credit.</p><p>The episode also needs four consecutive threshold exceedances and at least two abnormal sensors. Gradual leaks may not produce a sharp signature.</p><p class="caption">Windows show 24 hours before and 96 hours after onset. Concurrent leaks and diurnal demand can affect the response.</p></div></div></div>`;
   let request=0;
   async function update() {
     const own=++request, event=DATA.events.find(e=>e.pipe===$('event').value), method=$('method').value;
-    const w=await fetchJSON(event.file); if(own!==request||!$('event-summary'))return;
+    const w=await fetchJSON(event.file); if(own!==request||version!==routeVersion||!$('event-summary'))return;
     const result=event.detections.find(d=>d.method===method), threshold=DATA.thresholds[method].threshold;
     const detected=result?.detected_at, valid=detected&&typeof detected==='string';
     $('event-summary').innerHTML=`<div class="metrics">${metric('Known onset',event.start.slice(11,16),event.start.slice(0,10))}${metric('Leak type',esc(event.type),`Pipe ${event.pipe}`)}${metric('Confirmation delay',valid?`${fmt(result.delay_hours)} h`:'Missed',valid?'Matched new alarm within 72h':'No matched new alarm within 72h')}${metric('Reported end',event.end.slice(0,10),event.end.startsWith('2019-12-31')?'Right-censored at record end':event.end.slice(11,16))}</div>`;
@@ -113,12 +114,26 @@ function patterns() {
 
 function models() {
   const methods=DATA.metrics.map(m=>m.method), m=DATA.metrics;
-  $('content').innerHTML=intro('Model comparison','Frozen thresholds, a common persistence policy, and an untouched 2019 holdout. All point metrics describe the new-onset task, not ongoing leak presence.')+
+  $('content').innerHTML=intro('Model comparison','Chronological 2019 benchmark, with thresholds selected only in 2018. This revised evaluation follows a correctness review; all point metrics describe new onsets, not ongoing leak presence.')+
     `<div class="notice">High recall is not enough. Frequent alarms can match a 72-hour onset window by chance. Compare event recall with the timing-shift control and false alarms.</div><div class="panel"><h2>2019 test results</h2>${comparisonTable()}<p class="caption">AP = average precision of the raw score. No-skill AP reference: ${fmt(m[0].positive_fraction,3)}. Delay includes detected events only; misses are excluded.</p></div>`+
+    panel('Precision–recall trade-off','Raw anomaly scores · dashed line is positive prevalence · curves sampled for display; AP is computed from all points',true,'precision-recall')+
     `<div class="split">${panel('Alarm reliability','Each bar counts unmatched new alarm starts in the test year',true,'false-alarms')}${panel('Event recall versus shifted alarms','200 circular timing shifts preserve alarm count and relative spacing',true,'shift-control')}</div>`+
+    `<div class="panel"><h2>Known onsets and alarm confirmations</h2><p>Each row is one new 2019 leak. Misses are marked at the end of the 72-hour detection window.</p><div class="controls"><label>Timeline method<select id="timeline-method">${options(methods,'PCA reconstruction')}</select></label></div><div id="event-timeline" class="chart tall"></div></div>`+
     `<div class="panel"><h2>Why the methods differ</h2><p>Robust and IQR baselines expose large departures directly. PCA can highlight departures from learned sensor relationships. Isolation Forest and novelty LOF use multivariate feature patterns. All methods face seasonal drift and ongoing background leaks.</p><p>A threshold selected on only two validation onsets is uncertain. The repository includes every validation candidate and fixed-threshold sensitivity at 24, 72 and 168 hours.</p><p>The timing-shift control is descriptive, not a significance test. It does not account for seasonal nonstationarity. An unmatched alarm may still reflect a genuine hydraulic change.</p></div>`;
   plot('false-alarms',[{x:methods,y:m.map(r=>r.false_alarms),type:'bar',marker:{color:colours[2]},hovertemplate:'%{x}<br>%{y} false onset alarms<extra></extra>'}],{hovermode:'closest',margin:{l:56,r:16,t:16,b:96},yaxis:{title:{text:'Unmatched alarms'},gridcolor:'#edf0f1'},xaxis:{tickangle:-20}});
   plot('shift-control',[{x:methods,y:m.map(r=>r.event_recall),name:'Observed',type:'bar',marker:{color:colours[0]}},{x:methods,y:m.map(r=>r.shift_control_mean_recall),name:'Shifted mean',type:'bar',marker:{color:'#bdc5c8'},error_y:{type:'data',symmetric:false,array:m.map(r=>r.shift_control_p95_recall-r.shift_control_mean_recall),arrayminus:m.map(r=>r.shift_control_mean_recall-r.shift_control_p05_recall),color:'#69737b'}}],{hovermode:'closest',barmode:'group',margin:{l:56,r:16,t:32,b:96},yaxis:{title:{text:'Event recall'},tickformat:'.0%',range:[0,1.1],gridcolor:'#edf0f1'},xaxis:{tickangle:-20}});
+}
+
+function renderEvaluationCharts() {
+  const methods=DATA.metrics.map(m=>m.method), prevalence=DATA.metrics[0].positive_fraction;
+  plot('precision-recall',methods.map(method=>line(DATA.pr_curves[method].recall,DATA.pr_curves[method].precision,method)),{hovermode:'closest',xaxis:{title:{text:'Recall'},range:[0,1],gridcolor:'#edf0f1'},yaxis:{title:{text:'Precision'},range:[0,1],gridcolor:'#edf0f1'},shapes:[{type:'line',xref:'paper',yref:'y',x0:0,x1:1,y0:prevalence,y1:prevalence,line:{color:'#69737b',width:1,dash:'dash'}}]});
+  function timeline(){
+    const method=$('timeline-method').value, known=DATA.events.filter(e=>e.year===2019), detected=[],missed=[];
+    known.forEach(e=>{const result=e.detections.find(d=>d.method===method);if(result?.detected_at)detected.push({event:e,result});else missed.push(e);});
+    const deadlines=missed.map(e=>{const date=new Date(e.start.replace(' ','T')+'Z');date.setUTCHours(date.getUTCHours()+72);return date.toISOString().slice(0,19);});
+    plot('event-timeline',[{x:known.map(e=>e.start),y:known.map(e=>e.pipe),name:'Known onset',type:'scatter',mode:'markers',marker:{symbol:'line-ns',size:16,color:colours[1]}},{x:detected.map(d=>d.result.detected_at),y:detected.map(d=>d.event.pipe),name:'Matched confirmation',type:'scatter',mode:'markers',marker:{size:8,color:colours[0]}},{x:deadlines,y:missed.map(e=>e.pipe),name:'Missed within 72h',type:'scatter',mode:'markers',marker:{symbol:'x',size:8,color:colours[3]}}],{hovermode:'closest',margin:{l:64,r:16,t:32,b:48},yaxis:{type:'category',categoryorder:'array',categoryarray:known.map(e=>e.pipe).reverse(),gridcolor:'#edf0f1'},xaxis:{type:'date',gridcolor:'#edf0f1'}});
+  }
+  bind('timeline-method','change',timeline);timeline();
 }
 
 function network() {
@@ -139,7 +154,7 @@ function methods() {
   const e=DATA.experiment;
   $('content').innerHTML=intro('Data & methodology','The analysis is reproducible from official downloads. Ground-truth leak histories are kept separate from features available at detection time.')+
     `<div class="split"><div class="panel"><h2>Source and quality</h2><p>BattLeDIM simulates realistic sensor measurements for L-Town. It is not a field deployment. The CSVs cover two complete years at five-minute intervals, with semicolon separators and decimal commas.</p><div class="data-list"><span>Measurement cells</span><strong>${fmt(DATA.insights.measurement_cells,0)}</strong><span>Missing values</span><strong>0</strong><span>Duplicate timestamps</span><strong>0</strong><span>Sampling</span><strong>Regular, 5 minutes</strong><span>Timezone</span><strong>Unspecified in source</strong></div><p class="caption">Downloads are verified against Zenodo checksums. No imputation was needed.</p></div><div class="panel"><h2>Chronological experiment</h2><div class="data-list"><span>Fit period</span><strong>Jan–Sep 2018</strong><span>Validation</span><strong>Oct–Dec 2018</strong><span>Test</span><strong>Jan–Dec 2019</strong><span>Eligible fit rows</span><strong>${fmt(e.training_rows,0)}</strong><span>ML fit sample</span><strong>${fmt(e.sample_rows,0)}</strong><span>Features</span><strong>${e.feature_count}</strong></div><p class="caption">Historical transition windows are excluded from fitting. Stable-operation rows may contain existing background leaks.</p></div></div>`+
-    `<div class="panel"><h2>From measurements to alarms</h2><ol><li>Aggregate completed 15-minute bins; retain original measurements separately.</li><li>Build causal daily residuals, hourly statistics, lags and weekly differences from pressure, flow and level.</li><li>Fit scales and five small detectors on eligible 2018 rows only.</li><li>Choose a training-score percentile by validation event F1; freeze it before testing.</li><li>Require four consecutive exceedances and at least two abnormal sensors; clear after four non-exceedances.</li><li>Match new alarm starts one-to-one to onsets within 72 hours. Timestamp confirmation without backdating.</li></ol></div>`+
+    `<div class="panel"><h2>From measurements to alarms</h2><ol><li>Aggregate completed 15-minute bins; retain original measurements separately.</li><li>Build causal daily residuals, hourly statistics, lags and weekly differences from pressure, flow and level.</li><li>Fit scales and five small detectors using the earliest 80% of eligible 2018 rows.</li><li>Use the latest 20% (${fmt(e.threshold_reference_rows,0)} unseen rows) as threshold reference. Select its score percentile using October–December validation event F1.</li><li>Require four consecutive exceedances and at least two abnormal sensors; clear after four observed non-exceedances. Missing data prove neither anomaly nor recovery.</li><li>Match new alarm starts one-to-one to onsets within 72 hours. Timestamp confirmation without backdating.</li></ol><p class="caption">Protocol v2 follows a correctness review. The 2019 benchmark has been inspected; threshold selection remains entirely within 2018.</p></div>`+
     `<div class="notice">Only two new onsets occur in validation. Persistent leaks, annual drift and an adapting reference limit how confidently these results generalise.</div>`+
     `<div class="panel"><h2>What to do next</h2><p>Reduce false alarms before seeking higher recall: compare sensor-group models, explicit demand adjustment and pump-state conditioning. Assess additional networks and longer validation histories. Evaluate localization separately, using a hydraulic model and a spatial scoring rule.</p><p>Read the full cleaning policy, feature definitions, matching rules and limitations in the repository.</p><a href="https://github.com/puneetpal-singh/water-leak-detection/blob/main/docs/methodology.md">Full methodology ↗</a></div>`;
 }
@@ -148,9 +163,11 @@ async function route() {
   if(!DATA)return;const version=++routeVersion, page=location.hash.slice(1)||'overview';
   document.querySelectorAll('nav a').forEach(a=>a.classList.toggle('active',a.dataset.page===page));
   $('status').style.display='none';
+  document.querySelectorAll('.js-plotly-plot').forEach(node=>Plotly.purge(node));
   const pages={overview,patterns,sensors,events,models,network,methods};
   if(!pages[page]){location.hash='overview';return;}
   await pages[page](version);
+  if(page==='models' && version===routeVersion)renderEvaluationCharts();
 }
 window.addEventListener('hashchange',()=>route().catch(showError));
 fetchJSON('data.json').then(data=>{DATA=data;return route();}).catch(showError);

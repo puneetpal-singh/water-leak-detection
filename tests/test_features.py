@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+import pytest
 from waterleak.features import aggregate, causal_features, stable_training_mask
 
 def test_features_invariant_to_future_measurement_changes():
@@ -25,3 +26,15 @@ def test_test_labels_cannot_change_training_selection():
     index = pd.date_range('2018-01-01', '2018-09-30', freq='1D')
     events = pd.DataFrame({'start': pd.to_datetime(['2019-01-01']), 'end': pd.to_datetime(['2019-02-01'])})
     assert stable_training_mask(index, events, '2018-10-01').all()
+
+@pytest.mark.parametrize('frequency', ['5min', '30min'])
+def test_wrong_feature_frequency_fails_instead_of_changing_lag_meanings(frequency):
+    x = pd.DataFrame({'pressure:n1': [1, 2, 3]}, index=pd.date_range('2018-01-01', periods=3, freq=frequency))
+    with pytest.raises(ValueError, match='15-minute'):
+        causal_features(x)
+
+@pytest.mark.parametrize('frequency', ['1min', '7min', '0min'])
+def test_invalid_aggregation_frequency_is_rejected(frequency):
+    x = pd.DataFrame({'pressure:n1': [1]}, index=pd.to_datetime(['2018-01-01']))
+    with pytest.raises(ValueError, match='multiple'):
+        aggregate(x, frequency)

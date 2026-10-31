@@ -8,8 +8,10 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from plotly.offline import get_plotlyjs
+from sklearn.metrics import precision_recall_curve
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 from waterleak.data import read_events
+from waterleak.evaluation import onset_labels
 
 ROOT = Path(__file__).resolve().parents[1]
 DIST = ROOT / 'dashboard/web/dist'
@@ -51,10 +53,21 @@ def export():
     scores = pd.read_parquet(ROOT / 'data/processed/scores.parquet')
     active = pd.read_parquet(ROOT / 'data/processed/activity.parquet')
     sensor_z = pd.read_parquet(ROOT / 'data/processed/sensor_z.parquet')
+    features = pd.read_parquet(ROOT / 'data/processed/features.parquet')
     events = read_events(ROOT / 'data/raw')
     detections = pd.read_csv(RESULTS / 'event_detections.csv')
     metrics = pd.read_csv(RESULTS / 'model_comparison.csv')
     experiment = json.loads((RESULTS / 'experiment.json').read_text())
+    pr_curves, pr_rows = {}, []
+    test = scores.loc['2019']
+    labels = onset_labels(test.index, events, experiment['config']['onset_horizon_hours'])
+    for method in test:
+        valid = test[method].notna()
+        precision, recall, _ = precision_recall_curve(labels[valid], test.loc[valid, method])
+        selected_points = np.unique(np.linspace(0, len(recall) - 1, min(500, len(recall))).astype(int))
+        pr_curves[method] = {'precision': precision[selected_points].tolist(), 'recall': recall[selected_points].tolist()}
+        pr_rows.extend({'method': method, 'precision': float(precision[j]), 'recall': float(recall[j])} for j in selected_points)
+    pd.DataFrame(pr_rows).to_csv(RESULTS / 'precision_recall_curves.csv', index=False)
     insights = json.loads((RESULTS / 'insights.json').read_text())
     stats = pd.read_csv(RESULTS / 'sensor_statistics.csv')
     dictionary = pd.read_csv(RESULTS / 'data_dictionary.csv').drop_duplicates('column')
@@ -88,7 +101,8 @@ def export():
     weekly = telemetry.filter(regex=r'^(flow:|pressure:)').resample('W').mean()
     save(DIST / 'data.json', {'insights': insights, 'sensors': sensors, 'events': event_records,
          'metrics': metrics.to_dict('records'), 'thresholds': experiment['thresholds'],
-         'experiment': {k: v for k, v in experiment.items() if k != 'training_feature_medians'},
+         'experiment': {k: v for k, v in experiment.items() if k not in ['training_feature_medians', 'estimator_fit_row_positions', 'threshold_reference_row_positions']},
+         'pr_curves': pr_curves,
          'topology': json.loads((RESULTS / 'topology.json').read_text()),
          'correlation': {'labels': correlations.columns.tolist(), 'z': correlations.values.tolist()},
          'daily': {'x': daily.index.strftime('%Y-%m-%d').tolist(), 'series': daily.round(3).to_dict('list')},
@@ -111,7 +125,35 @@ def export():
     for method in metrics.method:
         row = metrics[metrics.method == method].iloc[0]
         fig.add_trace(go.Bar(name=method, x=['Point F1', 'Event recall'], y=[row.f1, row.event_recall]))
-    html(style(fig, 'New-onset detection on the untouched 2019 test year'), 'model_comparison.html')
+    html(style(fig, 'New-onset detection on the chronological 2019 benchmark'), 'model_comparison.html')
+    fig = go.Figure()
+    for method, curve in pr_curves.items():
+        fig.add_trace(go.Scatter(x=curve['recall'], y=curve['precision'], mode='lines', name=method))
+    fig.add_hline(y=float(labels.mean()), line_dash='dash', line_color='#69737b')
+    style(fig, 'How much precision is retained as recall increases?', 'Precision')
+    fig.update_xaxes(title='Recall', range=[0, 1])
+    fig.update_yaxes(range=[0, 1])
+    html(fig, 'precision_recall.html')
+    fig = go.Figure()
+    for method, group in detections.groupby('method', sort=False):
+        matched = group.dropna(subset=['detected_at'])
+        fig.add_trace(go.Scatter(x=matched.detected_at, y=matched['pipe'], name=method,
+                                mode='markers', marker={'size': 7}))
+    test_events = events[events.start.dt.year.eq(2019)]
+    fig.add_trace(go.Scatter(x=test_events.start, y=test_events['pipe'], mode='markers', name='Known onset',
+                            marker={'symbol': 'line-ns', 'size': 14, 'color': '#303a40'}))
+    style(fig, 'When are new onsets and matched alarm confirmations observed?')
+    fig.update_layout(height=640)
+    html(fig, 'event_timeline.html')
+    fig = make_subplots(rows=2, cols=1, subplot_titles=['Pressure n1 daily residual (m)', 'Flow p227 daily residual (m³/h)'])
+    fitting = features.iloc[experiment['estimator_fit_row_positions']]
+    for row, column in enumerate(['pressure:n1|residual', 'flow:p227|residual'], start=1):
+        for split, frame, colour in [('Estimator fit', fitting, '#69737b'), ('2019 benchmark', features.loc['2019'], '#087782')]:
+            fig.add_trace(go.Histogram(x=frame[column].dropna(), name=split, legendgroup=split, showlegend=row == 1,
+                histnorm='probability density', nbinsx=80, opacity=.55, marker_color=colour), row=row, col=1)
+    style(fig, 'How do feature distributions shift between fitting and 2019?')
+    fig.update_layout(barmode='overlay', height=680)
+    html(fig, 'feature_distributions.html')
     fig = go.Figure()
     for method, group in detections.groupby('method'):
         fig.add_trace(go.Box(y=group.delay_hours.dropna(), name=method, boxpoints='all'))
@@ -121,10 +163,7 @@ def export():
     fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=.08)
     fig.add_trace(go.Scatter(x=window.index, y=window['pressure:n1'], name='Pressure n1'), row=1, col=1)
     fig.add_trace(go.Scatter(x=window.index, y=window['flow:p227'], name='Flow p227'), row=2, col=1)
-    for method in ['Robust baseline', 'PCA reconstruction']:
-        fig.add_trace(go.Scatter(x=window.index, y=scores[method].reindex(window.index), name=method), row=3, col=1)
-    # Different score scales are intentionally separate in the interactive dashboard.
-    fig.data = fig.data[:3]
+    fig.add_trace(go.Scatter(x=window.index, y=scores['Robust baseline'].reindex(window.index), name='Robust baseline'), row=3, col=1)
     fig.add_hline(y=experiment['thresholds']['Robust baseline']['threshold'], line_dash='dash', row=3, col=1)
     fig.add_vline(x=selected.start.timestamp() * 1000, line_color='#bb791e', line_dash='dot')
     style(fig, 'p523: measurements and robust-baseline score around an abrupt onset')
@@ -140,28 +179,8 @@ def export():
     style(fig, 'Pressure n1 versus flow p227', 'Pressure (m)')
     fig.update_xaxes(title='Flow (m3/h)')
     html(fig, 'pressure_flow.html')
-    # Notebooks are executable analysis entry points, backed by reusable modules.
-    import nbformat as nbf
-    notebook_specs = [
-        ('01_data_understanding', 'Inspect the official files and data dictionary',
-         "audit = json.loads((ROOT/'results/data_audit.json').read_text())\npd.DataFrame(audit).T",
-         "pd.read_csv(ROOT/'results/data_dictionary.csv').head(12)"),
-        ('02_exploratory_analysis', 'Operating patterns, correlation and event comparisons',
-         "profiles = pd.read_csv(ROOT/'results/hourly_profiles.csv')\npx.line(profiles, x='hour', y=['flow:p227','flow:p235','flow:PUMP_1'])",
-         "correlation = pd.read_csv(ROOT/'results/correlations.csv', index_col=0)\npx.imshow(correlation, zmin=-1, zmax=1, color_continuous_scale='RdBu_r')"),
-        ('03_feature_engineering', 'Inspect causal features and training masks',
-         "from waterleak.features import aggregate, causal_features\nx = pd.read_parquet(ROOT/'data/processed/telemetry.parquet')\nf, residual = causal_features(aggregate(x))\nf[['pressure:n1|residual','flow:p227|residual']].describe()",
-         "pd.read_csv(ROOT/'results/feature_distributions.csv')"),
-        ('04_model_experiments', 'Compare frozen models on the 2019 holdout',
-         "pd.read_csv(ROOT/'results/model_comparison.csv')",
-         "pd.read_csv(ROOT/'results/event_detections.csv').query('method == \"Robust baseline\"')")]
-    for name, title, cell1, cell2 in notebook_specs:
-        nb = nbf.v4.new_notebook(cells=[nbf.v4.new_markdown_cell(f'# {title}\n\nRun `scripts/run_pipeline.py` first. Read `docs/methodology.md` for the onset task, contaminated stable-operation baseline and chronological split.'),
-            nbf.v4.new_code_cell("from pathlib import Path\nimport sys, json\nimport pandas as pd\nimport plotly.express as px\nROOT = Path.cwd() if (Path.cwd()/'results').exists() else Path.cwd().parent\nsys.path.insert(0, str(ROOT/'src'))"),
-            nbf.v4.new_code_cell(cell1), nbf.v4.new_code_cell(cell2)])
-        nb.metadata['kernelspec'] = {'display_name': 'Python 3', 'language': 'python', 'name': 'python3'}
-        (ROOT / 'notebooks').mkdir(exist_ok=True)
-        nbf.write(nb, ROOT / f'notebooks/{name}.ipynb')
+    from waterleak.notebooks import write_notebooks
+    write_notebooks(ROOT)
     print(f'Exported {len(sensors)} sensor histories, {len(events)} event windows and {len(list(figure_dir.glob("*.html")))} figures')
 
 if __name__ == '__main__':

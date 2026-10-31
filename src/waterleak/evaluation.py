@@ -10,9 +10,23 @@ def alarm_episodes(exceedance: pd.Series, persistence: int = 4,
     Detection is timestamped at confirmation, never backdated to the first sample.
     An episode still active at the split boundary remains one episode.
     """
+    if persistence < 1 or clearance < 1:
+        raise ValueError('Persistence and clearance must be positive')
+    if not exceedance.index.is_unique or not exceedance.index.is_monotonic_increasing:
+        raise ValueError('Alarm timestamps must be sorted and unique')
     active = np.zeros(len(exceedance), dtype=bool)
     episodes, run, clear, start = [], 0, 0, None
+    previous = None
     for i, (time, value) in enumerate(exceedance.items()):
+        if previous is not None and time - previous != pd.Timedelta('15min'):
+            run, clear = 0, 0
+        previous = time
+        if pd.isna(value):
+            # Missing telemetry proves neither anomaly nor recovery. Keep an
+            # existing episode, but interrupt both confirmation and clearance runs.
+            run, clear = 0, 0
+            active[i] = start is not None
+            continue
         if start is None:
             run = run + 1 if value else 0
             if run >= persistence:
@@ -37,8 +51,8 @@ def onset_labels(index: pd.DatetimeIndex, events: pd.DataFrame, hours: int = 72)
 def match_events(episodes: pd.DataFrame, events: pd.DataFrame,
                  start: pd.Timestamp, end: pd.Timestamp, hours: int = 72) -> tuple[pd.DataFrame, int]:
     """One alarm can match at most one onset. Pre-onset alarms receive no credit."""
-    alarms = episodes[(episodes.start >= start) & (episodes.start < end)]
-    eligible = events[(events.start >= start) & (events.start < end)]
+    alarms = episodes[(episodes.start >= start) & (episodes.start < end)].sort_values('start').reset_index(drop=True)
+    eligible = events[(events.start >= start) & (events.start < end)].sort_values('start')
     used, rows = set(), []
     for event in eligible.itertuples():
         deadline = min(event.end, event.start + pd.Timedelta(hours=hours), end)
@@ -52,7 +66,8 @@ def match_events(episodes: pd.DataFrame, events: pd.DataFrame,
         rows.append({'pipe': event.pipe, 'type': event.type, 'start': event.start, 'end': event.end,
                      'detected_at': detection,
                      'delay_hours': (detection - event.start).total_seconds() / 3600 if pd.notna(detection) else np.nan})
-    return pd.DataFrame(rows), len(alarms) - len(used)
+    columns = ['pipe', 'type', 'start', 'end', 'detected_at', 'delay_hours']
+    return pd.DataFrame(rows, columns=columns), len(alarms) - len(used)
 
 def evaluate(scores: pd.Series, active: pd.Series, episodes: pd.DataFrame,
              events: pd.DataFrame, start: str, end: str, hours: int = 72) -> tuple[dict, pd.DataFrame]:

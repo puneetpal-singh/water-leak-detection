@@ -4,6 +4,9 @@ import pandas as pd
 
 def aggregate(telemetry: pd.DataFrame, frequency: str = '15min') -> pd.DataFrame:
     """Right label completed bins. A 00:15 row contains 00:00, 00:05, 00:10."""
+    duration = pd.Timedelta(frequency)
+    if duration < pd.Timedelta('5min') or duration % pd.Timedelta('5min'):
+        raise ValueError('Aggregation frequency must be a positive multiple of 5 minutes')
     bins = telemetry.resample(frequency, closed='left', label='right')
     expected = int(pd.Timedelta(frequency) / pd.Timedelta('5min'))
     return bins.mean().where(bins.count() >= expected)
@@ -14,6 +17,11 @@ def causal_features(measurements: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFr
     All features include the most recently completed measurement bin. No centered
     windows, backward fill, future demand, or retrospective labels are used.
     """
+    index = measurements.index
+    if not isinstance(index, pd.DatetimeIndex) or not index.is_unique or not index.is_monotonic_increasing:
+        raise ValueError('Features require a sorted, unique DatetimeIndex')
+    if len(index) > 1 and not (index.to_series().diff().dropna() == pd.Timedelta('15min')).all():
+        raise ValueError('Features require a regular 15-minute grid; resample first')
     x = measurements[[c for c in measurements if c.startswith(('pressure:', 'flow:', 'level:'))]]
     # Same quarter-hour on the preceding seven days; excludes today's observation.
     baseline = pd.DataFrame(index=x.index, columns=x.columns, dtype=float)
