@@ -16,3 +16,20 @@ Pass order: spacing, color, icons, copy, type, layout, details, visuals, motion.
 Use a 4 px spacing grid; neutral surfaces; teal measurements and amber onset markers;
 Segoe UI with Consolas figures; no decorative icons or animation. Let one main chart
 lead each view. Label the retrospective study and 72-hour onset task explicitly.
+
+## Rendered review
+
+The first desktop rendering kept chart color confined to measurements and event
+markers, with quiet navigation and consistent spacing. The event-date figure
+wrapped at the narrower desktop viewport; it now uses a smaller, non-wrapping
+figure style. No decorative images, glows, gradients or animated status indicators
+are present. The interface uses the real source geometry and measured outputs.
+
+The passes were applied in order: spacing on the 4 px grid; restrained neutral
+surfaces and semantic chart colors; a single flat network mark; direct labels;
+two font roles; one leading chart per view; consistent borders and controls;
+real traces and topology as the visuals; no motion beyond ordinary controls.
+
+Browser checks exercised sensor/date changes, event sensor attribution, operating
+patterns and actual network/correlation rendering. Streamlit AppTest exercised
+all six workbench views. Screenshots are stored in results/screenshots.

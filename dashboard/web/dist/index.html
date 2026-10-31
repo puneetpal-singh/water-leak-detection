@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="description" content="An engineering study of BattLeDIM water-network telemetry and new-leak detection, with measured model performance.">
+  <title>L-Town · Water network analytics</title>
+  <link rel="stylesheet" href="style.css">
+  <script defer src="plotly.min.js"></script><script defer src="app.js"></script>
+</head>
+<body>
+  <aside>
+    <a class="brand" href="#overview"><svg viewBox="0 0 32 32" aria-hidden="true"><path d="M5 7h13v18h9M5 16h22M18 7h9"/><circle cx="18" cy="16" r="3"/></svg><span>L-Town<span class="brand-sub">Water network analytics</span></span></a>
+    <div class="study">BattLeDIM / 2018–2019<br><span>Retrospective engineering study</span></div>
+    <nav aria-label="Analysis views">
+      <a href="#overview" data-page="overview">Overview</a>
+      <a href="#patterns" data-page="patterns">Operating patterns</a>
+      <a href="#sensors" data-page="sensors">Sensor explorer</a>
+      <a href="#events" data-page="events">Leak event explorer</a>
+      <a href="#models" data-page="models">Model comparison</a>
+      <a href="#network" data-page="network">Network & relationships</a>
+      <a href="#methods" data-page="methods">Data & methodology</a>
+    </nav>
+    <div class="sidebar-bottom"><span class="marker"></span> Five-minute source data<br>119 measured channels<br><a href="https://github.com/puneetpal-singh/water-leak-detection" target="_blank" rel="noreferrer">Source & reproducibility ↗</a></div>
+  </aside>
+  <main>
+    <header><span>Water distribution / L-Town</span><span class="mono">2019 test holdout</span></header>
+    <div id="status" role="status">Loading verified dataset results…</div>
+    <section id="content" aria-live="polite"></section>
+    <footer>Source: <a href="https://zenodo.org/records/4017659">BattLeDIM, CC BY 4.0</a> · Simulated telemetry, nominal network · Interface guided by <a href="https://github.com/heydamir/unslop">/unslop by Damir Sokolovsky</a></footer>
+  </main>
+</body>
+</html>
