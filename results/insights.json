@@ -1,0 +1,25 @@
+{
+  "rows": 210240,
+  "channels": 119,
+  "measurement_cells": 25018560,
+  "start": "2018-01-01 00:00:00",
+  "end": "2019-12-31 23:55:00",
+  "pressure_median_m": 46.9,
+  "strongest_hourly_flow": "flow:p235",
+  "strongest_hourly_flow_swing_m3h": 78.31137328767124,
+  "flow_peak_hours": {
+    "flow:p227": 19,
+    "flow:p235": 19,
+    "flow:PUMP_1": 18
+  },
+  "flow_trough_hours": {
+    "flow:p227": 4,
+    "flow:p235": 4,
+    "flow:PUMP_1": 6
+  },
+  "2018_leak_presence_fraction": 0.9780251141552512,
+  "2019_leak_presence_fraction": 1.0,
+  "events_2018": 14,
+  "events_2019": 19,
+  "pressure_flow_correlation_n1_p227": -0.6174020377953817
+}
