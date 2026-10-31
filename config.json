@@ -1,0 +1,13 @@
+{
+  "seed": 42,
+  "model_frequency": "15min",
+  "train_end": "2018-10-01",
+  "validation_end": "2019-01-01",
+  "onset_horizon_hours": 72,
+  "transition_exclusion_hours": 168,
+  "alarm_persistence": 4,
+  "minimum_sensors": 2,
+  "sensor_z_threshold": 2.5,
+  "threshold_quantiles": [0.95, 0.975, 0.99, 0.995, 0.999],
+  "fit_sample_limit": 6000
+}
