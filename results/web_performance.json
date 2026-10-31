@@ -1,6 +1,6 @@
 {
-  "total_static_bytes": 8750752,
-  "overview_gzip_estimate_bytes": 540490,
+  "total_static_bytes": 8748593,
+  "overview_gzip_estimate_bytes": 539610,
   "chart_library_bytes": 1420800,
   "chart_library_gzip_estimate_bytes": 472074,
   "bootstrap_asset_bytes": 14496,
@@ -19,6 +19,6 @@
   "score_decimals": 5,
   "transfer_measurement": "Local gzip estimate; actual Vercel compression and caching may differ",
   "server_inference_required": false,
-  "static_size_reduction_pct": 88.88703745204994,
-  "initial_gzip_reduction_pct": 67.84546978608067
+  "static_size_reduction_pct": 88.88977926054149,
+  "initial_gzip_reduction_pct": 67.8978222562249
 }
