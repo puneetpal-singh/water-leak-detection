@@ -1,28 +1,71 @@
 'use strict';
-let DATA, routeVersion = 0;
+let DATA, MANIFEST, routeVersion = 0, chartLibrary;
 const cache = new Map();
+const ASSET_BASE = new URL('.', document.currentScript.src);
+const CACHE_LIMIT = 10;
 const $ = id => document.getElementById(id);
 const esc = text => String(text ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const fmt = (n, digits = 1) => n == null || !Number.isFinite(Number(n)) ? '—' : Number(n).toLocaleString('en-GB', {maximumFractionDigits:digits, minimumFractionDigits:digits});
 const pct = n => `${fmt(n * 100)}%`;
 const colours = ['#087782','#a66a17','#69737b','#ac493b','#4e6582'];
 async function fetchJSON(path) {
-  if (!cache.has(path)) {
-    const response = await fetch(path);
-    if (!response.ok) throw new Error(`Could not load ${path} (${response.status})`);
-    cache.set(path, await response.json());
+  if(cache.has(path)){
+    const pending=cache.get(path);cache.delete(path);cache.set(path,pending);return pending;
   }
-  return cache.get(path);
+  const pending=(async()=>{
+    const response=await fetch(new URL(path,ASSET_BASE));
+    if(!response.ok)throw new Error(`Could not load ${path} (${response.status})`);
+    let payload;
+    if(path.endsWith('.gz')){
+      if(typeof DecompressionStream==='undefined')throw new Error('This demo requires a current browser with gzip stream support');
+      payload=await new Response(response.body.pipeThrough(new DecompressionStream('gzip'))).json();
+    }else payload=await response.json();
+    if(payload.time){
+      const {start,step_seconds,count}=payload.time;
+      const origin=Date.parse(start+'Z');
+      payload.x=Array.from({length:count},(_,i)=>new Date(origin+i*step_seconds*1000).toISOString().slice(0,19));
+      if(payload.abnormal_bits!=null){
+        const bits=atob(payload.abnormal_bits);
+        payload.abnormal=Array.from({length:count},(_,i)=>Boolean(bits.charCodeAt(i>>3)&(1<<(i&7))));
+      }
+    }
+    return payload;
+  })();
+  cache.set(path,pending);
+  if(cache.size>CACHE_LIMIT)cache.delete(cache.keys().next().value);
+  try{return await pending;}catch(error){if(cache.get(path)===pending)cache.delete(path);throw error;}
 }
+function loadCharts(){
+  if(typeof Plotly!=='undefined')return Promise.resolve();
+  if(!chartLibrary)chartLibrary=new Promise((resolve,reject)=>{
+    const script=document.createElement('script');script.src=new URL(MANIFEST.plotly,ASSET_BASE).href;script.async=true;
+    script.onload=resolve;script.onerror=()=>{chartLibrary=null;script.remove();reject(new Error('Chart library could not be loaded; reload to retry'));};
+    document.head.append(script);
+  });
+  return chartLibrary;
+}
+const chartObserver=typeof IntersectionObserver==='undefined'?null:new IntersectionObserver(entries=>{
+  for(const entry of entries)if(entry.isIntersecting){chartObserver.unobserve(entry.target);entry.target.pendingChart?.();}
+},{rootMargin:'200px'});
 function plot(id, traces, options = {}) {
-  return Plotly.react(id, traces, {
+  const version=routeVersion,target=$(id);
+  const render=()=>loadCharts().then(()=>{
+    if(version!==routeVersion || $(id)!==target)return;
+    return Plotly.react(id, traces, {
     margin:{l:56,r:16,t:24,b:48}, paper_bgcolor:'#ffffff', plot_bgcolor:'#ffffff',
     font:{family:'Segoe UI, Arial, sans-serif',size:12,color:'#515b63'},
     colorway:colours, hovermode:'x unified', autosize:true,
     xaxis:{gridcolor:'#edf0f1',zeroline:false,showline:true,linecolor:'#dfe3e5'},
     yaxis:{gridcolor:'#edf0f1',zeroline:false},
     legend:{orientation:'h',y:1.12,x:0}, ...options
-  }, {responsive:true,displaylogo:false,modeBarButtonsToRemove:['lasso2d','select2d','autoScale2d']});
+    }, {responsive:true,displaylogo:false,modeBarButtonsToRemove:['lasso2d','select2d','autoScale2d']});
+  }).catch(error=>{if(version===routeVersion)showError(error);});
+  if(chartObserver){
+    const rectangle=target.getBoundingClientRect();
+    if(rectangle.top>window.innerHeight+200 || rectangle.bottom < -200){target.pendingChart=render;chartObserver.observe(target);return Promise.resolve();}
+    chartObserver.unobserve(target);
+  }
+  return render();
 }
 function line(x,y,name,extra={}) { return {x,y,name,mode:'lines',type:'scatter',line:{width:1.5},...extra}; }
 function onsetShape(time) { return {type:'line',xref:'x',yref:'paper',x0:time,x1:time,y0:0,y1:1,line:{color:'#a66a17',width:1.5,dash:'dot'}}; }
@@ -58,7 +101,7 @@ async function sensors(version) {
     const own=++request, sensor=DATA.sensors.find(s=>s.id===$('sensor').value), file=await fetchJSON(sensor.file);
     if(own!==request || version!==routeVersion || !$('sensor-trace')) return;
     const start=$('from').value, end=$('through').value;
-    function clearCharts(){for(const id of ['sensor-trace','sensor-hist','sensor-profile']){$(id).replaceChildren();Plotly.purge(id);}}
+    function clearCharts(){for(const id of ['sensor-trace','sensor-hist','sensor-profile']){chartObserver?.unobserve($(id));$(id).pendingChart=null;if(typeof Plotly!=='undefined')Plotly.purge(id);$(id).replaceChildren();}}
     if(!start || !end || start>end) { clearCharts();$('sensor-stats').innerHTML='<p>Choose a valid date range with From before Through.</p>'; return; }
     const pairs=file.x.map((x,j)=>[x,file.y[j],file.abnormal?.[j]]).filter(([x,y])=>x.slice(0,10)>=start&&x.slice(0,10)<=end&&y!=null);
     if(!pairs.length) { clearCharts();$('sensor-stats').innerHTML='<p>No observations in the selected period.</p>'; return; }
@@ -161,13 +204,21 @@ function methods() {
 
 async function route() {
   if(!DATA)return;const version=++routeVersion, page=location.hash.slice(1)||'overview';
+  window.scrollTo?.({top:0,left:0,behavior:'auto'});
   document.querySelectorAll('nav a').forEach(a=>a.classList.toggle('active',a.dataset.page===page));
   $('status').style.display='none';
-  document.querySelectorAll('.js-plotly-plot').forEach(node=>Plotly.purge(node));
+  chartObserver?.disconnect();
+  if(typeof Plotly!=='undefined')document.querySelectorAll('.js-plotly-plot').forEach(node=>Plotly.purge(node));
   const pages={overview,patterns,sensors,events,models,network,methods};
   if(!pages[page]){location.hash='overview';return;}
+  if(MANIFEST.views[page]){
+    $('content').innerHTML='<p>Loading this view…</p>';
+    const section=await fetchJSON(MANIFEST.views[page]);
+    if(version!==routeVersion)return;
+    Object.assign(DATA,section);
+  }
   await pages[page](version);
   if(page==='models' && version===routeVersion)renderEvaluationCharts();
 }
 window.addEventListener('hashchange',()=>route().catch(showError));
-fetchJSON('data.json').then(data=>{DATA=data;return route();}).catch(showError);
+fetchJSON('manifest.json').then(async manifest=>{MANIFEST=manifest;DATA=await fetchJSON(manifest.bootstrap);return route();}).catch(showError);

@@ -2,6 +2,8 @@
 from pathlib import Path
 import json
 import sys
+import gzip
+import base64
 import numpy as np
 import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
@@ -46,7 +48,13 @@ def verify() -> None:
         candidates = calibration[calibration.method.eq(row.method)]
         selected = candidates.sort_values(['event_f1', 'false_alarms', 'quantile'], ascending=[False, True, False]).iloc[0]
         np.testing.assert_allclose(row.threshold, selected.threshold)
-    payload = json.loads((web / 'data.json').read_text())
+    manifest = json.loads((web / 'manifest.json').read_text())
+    def asset(name):
+        return json.loads(gzip.decompress((web/name).read_bytes()))
+    def decode_clock(value):
+        clock = value['time']
+        return pd.date_range(clock['start'],periods=clock['count'],freq=pd.Timedelta(seconds=clock['step_seconds']))
+    payload = asset(manifest['bootstrap'])
     assert len(payload['sensors']) == 119 and len(payload['events']) == 33
     assert payload['experiment']['protocol_version'] == 2
     assert payload['insights']['measurement_cells'] == x.size
@@ -54,14 +62,26 @@ def verify() -> None:
         np.testing.assert_allclose(payload['thresholds'][method]['threshold'], threshold['threshold'], atol=0.0000051, rtol=0)
     hourly = x.resample('1h').mean()
     for sensor in payload['sensors']:
-        exported = json.loads((web / sensor['file']).read_text())
-        assert exported['x'] == hourly.index.strftime('%Y-%m-%dT%H:%M:%S').tolist()
+        exported = asset(sensor['file'])
+        pd.testing.assert_index_equal(decode_clock(exported),hourly.index,check_names=False)
         np.testing.assert_allclose(np.array(exported['y'], dtype=float), hourly[sensor['id']].to_numpy(),
                                    atol=0.000501, rtol=0, equal_nan=True)
+        if exported['abnormal_bits'] is not None:
+            packed = np.frombuffer(base64.b64decode(exported['abnormal_bits']),dtype=np.uint8)
+            flags = np.unpackbits(packed,bitorder='little')[:len(hourly)].astype(bool)
+            z = pd.read_parquet(processed/'sensor_z.parquet',columns=[sensor['id']])
+            expected = z[sensor['id']].abs().resample('1h').max().reindex(hourly.index).gt(2.5)
+            np.testing.assert_array_equal(flags,expected)
+    model_x = pd.read_parquet(processed/'model_measurements.parquet')
     for event in payload['events']:
-        window = json.loads((web / event['file']).read_text())
-        assert len(window['x']) == len(next(iter(window['scores'].values())))
+        window = asset(event['file'])
+        index = decode_clock(window)
+        assert len(index) == len(next(iter(window['scores'].values())))
         assert set(window['scores']) == set(scores.columns)
+        for sensor,values in window['measurements'].items():
+            np.testing.assert_allclose(np.array(values,dtype=float),model_x[sensor].reindex(index),atol=.000501,rtol=0,equal_nan=True)
+        for method,values in window['scores'].items():
+            np.testing.assert_allclose(np.array(values,dtype=float),scores[method].reindex(index),atol=.00000501,rtol=0,equal_nan=True)
         if event['year'] == 2019:
             assert len(event['detections']) == len(metrics)
     (results / 'verification.json').write_text(json.dumps({
@@ -69,6 +89,7 @@ def verify() -> None:
         'estimator_fit_rows': len(fit), 'unseen_reference_rows': len(reference),
         'model_metric_rows_verified': len(metrics), 'event_detection_rows_verified': len(detections),
         'sensor_exports_verified': len(payload['sensors']), 'event_windows_verified': len(payload['events']),
+        'asset_encoding': 'gzip JSON, regular time grids, packed anomaly flags',
         'status': 'passed'}, indent=2), encoding='utf-8')
     print('PASS: source checksums, fit/reference separation, calibration, metrics, event matching, 119 sensor histories and 33 event exports')
 

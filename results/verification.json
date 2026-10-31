@@ -11,5 +11,6 @@
   "event_detection_rows_verified": 95,
   "sensor_exports_verified": 119,
   "event_windows_verified": 33,
+  "asset_encoding": "gzip JSON, regular time grids, packed anomaly flags",
   "status": "passed"
 }

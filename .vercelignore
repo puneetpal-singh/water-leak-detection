@@ -1,0 +1,14 @@
+.git/
+.venv/
+.openai/
+data/
+notebooks/
+results/
+tests/
+src/
+docs/
+dashboard/app.py
+dashboard/web/vendor/
+requirements*.txt
+pyproject.toml
+scripts/*.py

@@ -173,6 +173,20 @@ hourly sensor histories and completed 15-minute event windows. Plotly is bundled
 locally. The Streamlit workbench adds original five-minute traces, trailing
 standard deviations, rates of change and full evaluation tables.
 
+The website export is optimized for static hosting: a smaller Plotly Cartesian
+bundle, content-hashed gzip data, compact time grids, packed anomaly flags,
+view-specific loading and deferred offscreen charts. All sensor values and
+evaluation results are preserved. See [Vercel/portfolio integration](docs/vercel.md)
+and the [measured size report](results/web_performance.json).
+
+To refresh only browser assets while keeping executed notebook outputs:
+
+```powershell
+python scripts/export_dashboard.py --web-only
+python scripts/verify_results.py
+python scripts/measure_web.py
+```
+
 ![Event investigation with sensor residual attribution](results/screenshots/event.jpg)
 
 Nine self-contained interactive figures are in [results/figures](results/figures):

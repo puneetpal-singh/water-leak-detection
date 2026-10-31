@@ -15,9 +15,10 @@ function fixture() {
   let resolveSensor;
   const sensorResponse = new Promise(resolve => { resolveSensor = resolve; });
   const context = vm.createContext({
-    document:{getElementById:element,querySelectorAll:()=>[]}, window:{addEventListener(){}},
+    URL,Response,DecompressionStream,atob,
+    document:{currentScript:{src:'https://example.test/demos/water-network/app.js'},getElementById:element,querySelectorAll:()=>[]}, window:{addEventListener(){}},
     Plotly:{react:(id,traces)=>{plots.push({id,traces});return Promise.resolve();},purge:id=>purged.push(id)},
-    fetch:url=>url==='data.json'?new Promise(()=>{}):sensorResponse,
+    fetch:url=>String(url).endsWith('/manifest.json')?new Promise(()=>{}):sensorResponse,
   });
   vm.runInContext(fs.readFileSync(path.join(__dirname,'../dashboard/web/dist/app.js'),'utf8'),context);
   vm.runInContext(`DATA={sensors:[{id:'pressure:n1',file:'sensors/0.json',unit:'m'}],events:[]}; routeVersion=1;`,context);
@@ -35,6 +36,28 @@ test('a sensor response cannot redraw a later route', async()=>{
   vm.runInContext('routeVersion=2',f.context);
   f.complete();await pending;
   assert.equal(f.plots.length,0);
+});
+
+test('compressed series reconstruct every timestamp and packed anomaly bit',async()=>{
+  const f=fixture();const zlib=require('node:zlib');
+  const flags=Buffer.from([0b10000101,0b00000001]).toString('base64');
+  const source={time:{start:'2019-03-30T23:00:00',step_seconds:3600,count:10},y:[1,2,3,4,5,6,7,8,9,10],abnormal_bits:flags};
+  f.context.fetch=async()=>new Response(zlib.gzipSync(JSON.stringify(source)));
+  const result=await vm.runInContext("fetchJSON('sample.json.gz')",f.context);
+  assert.equal(result.x[0],'2019-03-30T23:00:00');
+  assert.equal(result.x[3],'2019-03-31T02:00:00'); // No invented DST conversion.
+  assert.equal(result.x[9],'2019-03-31T08:00:00');
+  assert.deepEqual(Array.from(result.abnormal),[true,false,true,false,false,false,false,true,true,false]);
+  assert.deepEqual(Array.from(result.y),source.y);
+});
+
+test('in-flight requests are shared and memory cache is bounded',async()=>{
+  const f=fixture();let requests=0;
+  f.context.fetch=async()=>{requests++;return {ok:true,json:async()=>({answer:42})};};
+  const pair=await vm.runInContext("Promise.all([fetchJSON('same.json'),fetchJSON('same.json')])",f.context);
+  assert.equal(requests,1);assert.equal(pair[0],pair[1]);
+  await vm.runInContext("Promise.all(Array.from({length:15},(_,i)=>fetchJSON('extra-'+i+'.json')))",f.context);
+  assert.equal(vm.runInContext('cache.size',f.context),10);
 });
 
 test('valid sensor data draws all three charts',async()=>{

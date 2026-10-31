@@ -13,3 +13,4 @@ jobs:
       - run: python -m pytest -q
       - run: node --check dashboard/web/dist/app.js
       - run: node --test tests/web.test.cjs
+      - run: python scripts/measure_web.py

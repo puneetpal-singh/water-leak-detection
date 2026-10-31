@@ -1,0 +1,24 @@
+{
+  "total_static_bytes": 8750752,
+  "overview_gzip_estimate_bytes": 540490,
+  "chart_library_bytes": 1420800,
+  "chart_library_gzip_estimate_bytes": 472074,
+  "bootstrap_asset_bytes": 14496,
+  "initial_files": [
+    "index.html",
+    "style.css",
+    "app.js",
+    "manifest.json",
+    "assets/plotly-cartesian-3.6.0.36e6a865de8830e2.min.js",
+    "assets/bootstrap.899a05343f43d793.json.gz",
+    "assets/event-p523.52f208efae4acb52.json.gz"
+  ],
+  "preserved_channels": 119,
+  "preserved_event_windows": 33,
+  "measurement_decimals": 3,
+  "score_decimals": 5,
+  "transfer_measurement": "Local gzip estimate; actual Vercel compression and caching may differ",
+  "server_inference_required": false,
+  "static_size_reduction_pct": 88.88703745204994,
+  "initial_gzip_reduction_pct": 67.84546978608067
+}

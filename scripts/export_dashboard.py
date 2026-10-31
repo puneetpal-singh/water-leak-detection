@@ -2,16 +2,16 @@
 from pathlib import Path
 import json
 import sys
-import shutil
+import argparse
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-from plotly.offline import get_plotlyjs
 from sklearn.metrics import precision_recall_curve
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 from waterleak.data import read_events
 from waterleak.evaluation import onset_labels
+from waterleak.web_assets import AssetWriter, time_grid, pack_flags, write_preview
 
 ROOT = Path(__file__).resolve().parents[1]
 DIST = ROOT / 'dashboard/web/dist'
@@ -45,15 +45,14 @@ def style(fig, title, ytitle=None):
         fig.update_yaxes(title=ytitle)
     return fig
 
-def export():
+def export(web_only: bool = False):
     DIST.mkdir(parents=True, exist_ok=True)
-    (DIST / 'plotly.min.js').write_text(get_plotlyjs(), encoding='utf-8')
+    writer = AssetWriter(DIST)
+    chart_library = writer.plotly(ROOT / 'dashboard/web/vendor/plotly-cartesian-3.6.0.min.js')
     telemetry = pd.read_parquet(ROOT / 'data/processed/telemetry.parquet')
     model_x = pd.read_parquet(ROOT / 'data/processed/model_measurements.parquet')
     scores = pd.read_parquet(ROOT / 'data/processed/scores.parquet')
-    active = pd.read_parquet(ROOT / 'data/processed/activity.parquet')
     sensor_z = pd.read_parquet(ROOT / 'data/processed/sensor_z.parquet')
-    features = pd.read_parquet(ROOT / 'data/processed/features.parquet')
     events = read_events(ROOT / 'data/raw')
     detections = pd.read_csv(RESULTS / 'event_detections.csv')
     metrics = pd.read_csv(RESULTS / 'model_comparison.csv')
@@ -75,12 +74,13 @@ def export():
     units = dictionary.set_index('column').unit.to_dict()
     sensors = []
     hourly = telemetry.resample('1h').mean()
-    times = hourly.index.strftime('%Y-%m-%dT%H:%M:%S').tolist()
+    clock = time_grid(hourly.index, 3600)
     for i, sensor in enumerate(telemetry):
         sensor_stats = stats[stats.sensor == sensor].iloc[0].to_dict()
-        sensors.append({'id': sensor, 'file': f'sensors/{i}.json', 'unit': units[sensor], 'stats': sensor_stats})
         abnormal = sensor_z[sensor].abs().resample('1h').max().reindex(hourly.index).gt(2.5).tolist() if sensor in sensor_z else None
-        save(DIST / f'sensors/{i}.json', {'x': times, 'y': hourly[sensor].round(3).tolist(), 'abnormal': abnormal})
+        filename = writer.json(f'sensor-{i}', serial({'time': clock, 'y': hourly[sensor].round(3).tolist(),
+                                                     'abnormal_bits': pack_flags(abnormal)}))
+        sensors.append({'id': sensor, 'file': filename, 'unit': units[sensor], 'stats': sensor_stats})
     event_records = []
     for event in events.itertuples():
         selection = (model_x.index >= event.start - pd.Timedelta(hours=24)) & (model_x.index <= event.start + pd.Timedelta(hours=96))
@@ -89,26 +89,36 @@ def export():
         event_metrics = detections[detections['pipe'] == event.pipe].to_dict('records')
         record = {'pipe': event.pipe, 'start': str(event.start), 'end': str(event.end), 'type': event.type,
                   'peak': str(event.peak), 'year': event.start.year, 'detections': event_metrics,
-                  'file': f'events/{event.pipe}.json'}
-        event_records.append(record)
-        save(DIST / record['file'], {'x': window.index.strftime('%Y-%m-%dT%H:%M:%S').tolist(),
+                  'file': None}
+        record['file'] = writer.json(f'event-{event.pipe}', serial({'time': time_grid(window.index, 900),
              'measurements': {c: window[c].round(3).tolist() for c in window if c.startswith(('pressure:', 'flow:', 'level:'))},
-             'scores': {c: aligned_scores[c].round(5).tolist() for c in aligned_scores},
-             'sensor_z': {c: sensor_z[c].reindex(window.index).round(3).tolist() for c in sensor_z}})
-    daily = telemetry.filter(regex=r'^(flow:|pressure:)').resample('D').mean()
+             'scores': {c: aligned_scores[c].astype('float64').round(5).tolist() for c in aligned_scores}}))
+        event_records.append(record)
     profiles = pd.read_csv(RESULTS / 'hourly_profiles.csv')
     weekday_profiles = pd.read_csv(RESULTS / 'weekday_profiles.csv')
     weekly = telemetry.filter(regex=r'^(flow:|pressure:)').resample('W').mean()
-    save(DIST / 'data.json', {'insights': insights, 'sensors': sensors, 'events': event_records,
+    core = writer.json('bootstrap', serial({'insights': insights, 'sensors': sensors, 'events': event_records,
          'metrics': metrics.to_dict('records'), 'thresholds': experiment['thresholds'],
-         'experiment': {k: v for k, v in experiment.items() if k not in ['training_feature_medians', 'estimator_fit_row_positions', 'threshold_reference_row_positions']},
-         'pr_curves': pr_curves,
+         'experiment': {k: experiment[k] for k in ['protocol_version', 'feature_count', 'training_rows',
+             'sample_rows', 'threshold_reference_rows', 'pca_components', 'pca_explained_variance']}}))
+    network = writer.json('network', serial({
          'topology': json.loads((RESULTS / 'topology.json').read_text()),
-         'correlation': {'labels': correlations.columns.tolist(), 'z': correlations.values.tolist()},
-         'daily': {'x': daily.index.strftime('%Y-%m-%d').tolist(), 'series': daily.round(3).to_dict('list')},
+         'correlation': {'labels': correlations.columns.tolist(), 'z': correlations.values.tolist()}}))
+    patterns = writer.json('patterns', serial({
          'profiles': profiles.round(3).to_dict('list'),
          'weekday_profiles': weekday_profiles.round(3).to_dict('list'),
-         'weekly': {'x': weekly.index.strftime('%Y-%m-%d').tolist(), 'series': weekly.round(3).to_dict('list')}})
+         'weekly': {'x': weekly.index.strftime('%Y-%m-%d').tolist(), 'series': weekly.round(3).to_dict('list')}}))
+    curves = writer.json('models', serial({'pr_curves': pr_curves}))
+    save(DIST / 'manifest.json', {'format_version': 1, 'bootstrap': core, 'plotly': chart_library,
+         'views': {'network': network, 'patterns': patterns, 'models': curves}})
+    example = events[events['pipe'].eq('p523')].iloc[0]
+    preview = model_x.loc[example.start - pd.Timedelta(hours=24):example.start + pd.Timedelta(hours=96)]
+    write_preview(DIST/'preview.svg',preview,example)
+    writer.finish()
+    if web_only:
+        print(f'Exported optimized browser assets: {len(sensors)} sensors and {len(events)} event windows')
+        return
+    features = pd.read_parquet(ROOT / 'data/processed/features.parquet')
     figure_dir = RESULTS / 'figures'
     figure_dir.mkdir(exist_ok=True)
     def html(fig, filename):
@@ -184,4 +194,6 @@ def export():
     print(f'Exported {len(sensors)} sensor histories, {len(events)} event windows and {len(list(figure_dir.glob("*.html")))} figures')
 
 if __name__ == '__main__':
-    export()
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--web-only', action='store_true', help='Preserve figures and executed notebook outputs')
+    export(parser.parse_args().web_only)
